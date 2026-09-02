@@ -1,0 +1,40 @@
+# ===== 用户数据与本地备份（禁止入库）=====
+data/
+backup/
+.workbuddy/
+项目目标.txt
+
+# ===== 安全设计文档（公开仓库不纳入）=====
+docs/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+env/
+
+# ===== 运行日志 =====
+*.log
+server_run.err.log
+server_run.out.log
+
+# ===== 环境变量与密钥文件 =====
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+secrets.json
+credentials.json
+
+# ===== 系统文件 =====
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
