@@ -3,8 +3,13 @@ chcp 65001 >nul
 title 一键备份 · 个人知识管理工作台
 cd /d "%~dp0"
 
-set PY=C:\Users\King\.workbuddy\binaries\python\envs\kb\Scripts\python.exe
-if not exist "%PY%" set PY=python
+set PY=python
+where python >nul 2>&1
+if errorlevel 1 (
+    echo  [错误] 未检测到 Python，请先安装 Python 3.10+ 并勾选 "Add to PATH"
+    pause
+    exit /b 1
+)
 
 echo.
 echo  ========================================
