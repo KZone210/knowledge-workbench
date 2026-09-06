@@ -12,9 +12,17 @@
 - 审计日志记录来源 IP
 """
 import os
+import sys
 import uuid
 import logging
 from pathlib import Path
+
+# pythonw.exe（无窗口解释器，服务子进程用它启动以免闪黑框）下 sys.stdout/stderr 为 None，
+# 此时 print / logging 会抛异常导致服务启动即退。兜底重定向到项目日志文件，兼顾无窗口启动与日志可查。
+if sys.stdout is None:
+    sys.stdout = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_run.out.log"), "a", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_run.err.log"), "a", encoding="utf-8")
 
 from fastapi import FastAPI, UploadFile, File, Form, Query, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -148,25 +156,32 @@ def process_file(upload: UploadFile, rel_path: str, dek: bytes, user_id: int):
             log.exception("解析失败 %s", filename)
             return {"ok": False, "filename": filename, "error": f"解析失败: {e}"}
 
+        # 标题回退：无文本媒体/未提取到标题时，parser 会回退到临时文件 basename
+        # （形如 ".hex…" 的内部 uuid），不得入库为 title。改用用户原始文件名去扩展名。
+        if not title or title.startswith("."):
+            title = os.path.splitext(filename)[0] or filename
+
         # 3) 加密落盘（此时磁盘写入的是密文副本）
         stored_name, abs_path = store.save_plain_to_enc(dek, str(tmp), ext)
         file_size = os.path.getsize(abs_path)
 
+        # 文件类型分类：统一按扩展名归类（不再做内容主题关键词分类）
+        category = classify.classify_by_ext(ext)
+
         if len(text.strip()) < 20:
             meta = {
                 "filename": filename, "stored_name": stored_name, "file_size": file_size,
-                "ext": ext, "title": title, "category": "未分类",
-                "tags": [], "keywords": [], "summary": "（未提取到有效文本，可能是扫描件/图片型 PDF）",
+                "ext": ext, "title": title, "category": category,
+                "tags": [], "keywords": [], "summary": "（未提取到有效文本：可能是扫描件、图片或无文本媒体）",
                 "word_count": 0, "content": text, "path": rel_path,
             }
             doc_id = store.insert_document(meta, user_id, dek)
-            return {"ok": True, "id": doc_id, "filename": filename, "title": title, "category": "未分类",
+            return {"ok": True, "id": doc_id, "filename": filename, "title": title, "category": category,
                     "keywords": [], "summary": meta["summary"], "low_text": True}
 
         keywords = nlp.extract_keywords(text, top_n=8)
-        category, score, matched = classify.classify(text, keywords)
-        summary = nlp.summarize(text, top_n=3)
         tags = classify.build_tags(keywords, category)
+        summary = nlp.summarize(text, top_n=3)
         meta = {
             "filename": filename, "stored_name": stored_name, "file_size": file_size,
             "ext": ext, "title": title, "category": category,
