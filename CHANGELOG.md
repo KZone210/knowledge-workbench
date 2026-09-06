@@ -3,6 +3,1206 @@
 > 本文件由 `tools/changelog.py` 自动维护，**仅保留最近 5 次代码变更**，超出自动删除。
 > 每次修改以 unified diff 形式记录（只存改动行，最小占用）。
 
+### 2026-09-05 09:27:26 | 自动分类改为按文件扩展名归类 + 支持上传视频/音频/压缩包（参考开源 Automatic-File-Organiser 扩展名映射）
+
+**文件:** `app.py`
+```diff
+--- app.py
++++ app.py
+@@ -149,23 +149,30 @@
+             return {"ok": False, "filename": filename, "error": f"解析失败: {e}"}
+
+ 
+
++        # 标题回退：无文本媒体/未提取到标题时，parser 会回退到临时文件 basename
+
++        # （形如 ".hex…" 的内部 uuid），不得入库为 title。改用用户原始文件名去扩展名。
+
++        if not title or title.startswith("."):
+
++            title = os.path.splitext(filename)[0] or filename
+
++
+
+         # 3) 加密落盘（此时磁盘写入的是密文副本）
+
+         stored_name, abs_path = store.save_plain_to_enc(dek, str(tmp), ext)
+
+         file_size = os.path.getsize(abs_path)
+
+ 
+
++        # 文件类型分类：统一按扩展名归类（不再做内容主题关键词分类）
+
++        category = classify.classify_by_ext(ext)
+
++
+
+         if len(text.strip()) < 20:
+
+             meta = {
+
+                 "filename": filename, "stored_name": stored_name, "file_size": file_size,
+
+-                "ext": ext, "title": title, "category": "未分类",
+
+-                "tags": [], "keywords": [], "summary": "（未提取到有效文本，可能是扫描件/图片型 PDF）",
+
++                "ext": ext, "title": title, "category": category,
+
++                "tags": [], "keywords": [], "summary": "（未提取到有效文本：可能是扫描件、图片或无文本媒体）",
+
+                 "word_count": 0, "content": text, "path": rel_path,
+
+             }
+
+             doc_id = store.insert_document(meta, user_id, dek)
+
+-            return {"ok": True, "id": doc_id, "filename": filename, "title": title, "category": "未分类",
+
++            return {"ok": True, "id": doc_id, "filename": filename, "title": title, "category": category,
+
+                     "keywords": [], "summary": meta["summary"], "low_text": True}
+
+ 
+
+         keywords = nlp.extract_keywords(text, top_n=8)
+
+-        category, score, matched = classify.classify(text, keywords)
+
++        tags = classify.build_tags(keywords, category)
+
+         summary = nlp.summarize(text, top_n=3)
+
+-        tags = classify.build_tags(keywords, category)
+
+         meta = {
+
+             "filename": filename, "stored_name": stored_name, "file_size": file_size,
+```
+
+**文件:** `backend/classify.py`
+```diff
+--- backend/classify.py
++++ backend/classify.py
+@@ -1,111 +1,107 @@
+ # -*- coding: utf-8 -*-
+
+-"""自动分类模块：预设类别关键词库 + 加权打分，输出类别与标签。"""
+
++"""自动分类模块：按文件扩展名归类为「文件类型」。
+
+ 
+
+-# 类别关键词库：词 → 权重（出现 1 次以上的词权重更高）
+
+-CATEGORIES = {
+
+-    "技术开发": {
+
+-        "python": 3, "代码": 3, "编程": 3, "开发": 2, "前端": 3, "后端": 3, "数据库": 2,
+
+-        "接口": 2, "api": 3, "部署": 2, "软件": 2, "程序": 2, "框架": 2, "算法": 2,
+
+-        "调试": 2, "bug": 3, "git": 3, "函数": 2, "变量": 2, "服务器": 2, "linux": 3,
+
+-        "docker": 3, "js": 3, "html": 3, "css": 3, "javascript": 3, "react": 3,
+
+-        "vue": 3, "架构": 2, "安全": 2, "漏洞": 2, "注入": 2, "测试": 2, "编译": 2,
+
++历史版本按内容主题（8 大类关键词加权打分）分类，已废弃；现改为扩展名归类。
+
++扩展名分组参考开源项目 BoddapuLokesh/Automatic-File-Organiser，类别名本地化为
+
++中文并按知识库场景增补（见 FILE_CATEGORIES）。
+
++
+
++对外接口（保持模块符号兼容）：
+
++- FILE_CATEGORIES      : 文件类型 → 扩展名集合（扩展名不含点、小写）
+
++- FILE_CATEGORY_ORDER  : 前端分类栏展示顺序
+
++- FILE_TYPE_NAMES      : 全部文件类型名（含“其他”）
+
++- DEFAULT_CATEGORY     : 未匹配扩展名时的兜底类别
+
++- classify_by_ext(ext) -> 文件类型类别名
+
++- build_tags(keywords, category) -> 标签列表
+
++"""
+
++
+
++from __future__ import annotations
+
++
+
++# 文件类型 → 扩展名（不含点、小写）。可按需增补。
+
++FILE_CATEGORIES: dict[str, set[str]] = {
+
++    "文档": {
+
++        "pdf", "doc", "docx", "txt", "xls", "xlsx", "ppt", "pptx",
+
++        "odt", "rtf", "csv", "md", "markdown",
+
+     },
+
+-    "人工智能": {
+
+-        "人工智能": 3, "大模型": 3, "机器学习": 3, "深度学习": 3, "神经网络": 3,
+
+-        "gpt": 3, "openai": 3, "模型": 2, "训练": 2, "推理": 2, "提示词": 3,
+
+-        "prompt": 3, "agent": 3, "智能体": 3, "aigc": 3, "生成": 2, "扩散模型": 3,
+
+-        "llm": 3, "transformer": 3, "多模态": 3, "语义": 2, "embedding": 3,
+
+-        "chatgpt": 3, "ai": 3, "数字人": 2, "语音识别": 3, "图像识别": 3, "nlp": 3,
+
++    "图片": {
+
++        "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "svg", "webp", "ico",
+
+     },
+
+-    "金融投资": {
+
+-        "投资": 3, "股票": 3, "基金": 3, "市场": 2, "财报": 3, "估值": 3, "收益率": 3,
+
+-        "资产": 2, "债券": 3, "行情": 2, "a股": 3, "美股": 3, "港股": 3, "仓位": 3,
+
+-        "风险": 2, "涨": 2, "跌": 2, "板块": 2, "指数": 2, "量化": 3, "回测": 3,
+
+-        "因子": 3, "交易": 2, "市值": 2, "市盈率": 3, "净利润": 3, "营收": 3,
+
+-        "现金流": 3, "货币": 2, "利率": 2, "通胀": 3, "宏观经济": 3, "gdp": 3,
+
+-        "银行": 2, "信贷": 3, "理财": 3, "保险": 2, "证券": 2, "期货": 3, "期权": 3,
+
+-        "分红": 2, "认购": 2, "IPO": 3, "定投": 3, "比特币": 3, "区块链": 3,
+
++    "视频": {
+
++        "mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp",
+
+     },
+
+-    "营销运营": {
+
+-        "运营": 3, "营销": 3, "用户": 2, "流量": 3, "转化": 3, "品牌": 2, "内容": 2,
+
+-        "投放": 3, "增长": 2, "涨粉": 3, "粉丝": 2, "直播间": 3, "短视频": 3,
+
+-        "抖音": 3, "小红书": 3, "公众号": 3, "爆款": 3, "选题": 3, "矩阵": 3,
+
+-        "变现": 3, "电商": 3, "销售": 2, "成交": 3, "数据": 2, "复盘": 3, "私域": 3,
+
+-        "社群": 3, "广告": 2, "点击率": 3, "曝光": 3, "留存": 3, "拉新": 3,
+
++    "音频": {
+
++        "mp3", "wav", "aac", "flac", "ogg", "wma", "m4a", "opus",
+
+     },
+
+-    "教育学习": {
+
+-        "学习": 3, "教程": 3, "课程": 3, "知识": 2, "培训": 3, "笔记": 2, "方法": 2,
+
+-        "读书": 3, "阅读": 3, "写作": 3, "考试": 3, "复习": 3, "知识点": 3,
+
+-        "技能": 2, "练习": 2, "教学": 3, "老师": 2, "学生": 2, "教材": 3, "背诵": 3,
+
+-        "思维导图": 3, "理解": 2, "归纳": 2, "总结": 2, "效率": 2, "番茄": 3,
+
++    "压缩包": {
+
++        "zip", "rar", "7z", "tar", "gz", "bz2", "xz",
+
+     },
+
+-    "健康养生": {
+
+-        "健康": 3, "养生": 3, "饮食": 3, "运动": 3, "睡眠": 3, "医疗": 3, "身体": 2,
+
+-        "营养": 3, "锻炼": 3, "跑步": 3, "瑜伽": 3, "健身": 3, "疾病": 3, "医生": 2,
+
+-        "症状": 3, "治疗": 3, "药物": 3, "体检": 3, "心理": 2, "情绪": 2, "压力": 2,
+
+-        "焦虑": 3, "免疫力": 3, "维生素": 3, "体重": 3, "血糖": 3, "血压": 3,
+
+-    },
+
+-    "职场管理": {
+
+-        "管理": 3, "团队": 3, "职场": 3, "领导力": 3, "效率": 2, "项目": 2, "组织": 2,
+
+-        "沟通": 2, "汇报": 3, "目标": 2, "执行": 2, "复盘": 3, "激励": 3, "招聘": 3,
+
+-        "面试": 3, "简历": 3, "晋升": 3, "绩效": 3, "kpi": 3, "okr": 3, "会议": 2,
+
+-        "协作": 2, "流程": 2, "制度": 2, "员工": 2, "老板": 2, "同事": 2, "裁员": 3,
+
+-    },
+
+-    "生活随笔": {
+
+-        "生活": 3, "随笔": 3, "日记": 3, "心情": 3, "旅行": 3, "美食": 3, "周末": 2,
+
+-        "朋友": 2, "家庭": 2, "孩子": 2, "父母": 2, "记录": 2, "感悟": 3, "回忆": 3,
+
+-        "日常": 3, "探店": 3, "风景": 2, "电影": 2, "音乐": 2, "读书会": 3,
+
++    "代码": {
+
++        "py", "js", "html", "htm", "css", "java", "c", "cpp", "h", "php",
+
++        "rb", "go", "rs", "json", "xml", "yaml", "sql", "sh",
+
+     },
+
+ }
+
+ 
+
+-DEFAULT_CATEGORY = "未分类"
+
++# 反查表：扩展名(小写) → 文件类型
+
++_EXT_TO_CATEGORY: dict[str, str] = {}
+
++for _cat, _exts in FILE_CATEGORIES.items():
+
++    for _ext in _exts:
+
++        _EXT_TO_CATEGORY[_ext] = _cat
+
++
+
++# 分类栏展示顺序
+
++FILE_CATEGORY_ORDER: list[str] = ["文档", "图片", "视频", "音频", "压缩包", "代码", "其他"]
+
++
+
++# 全部文件类型名（含兜底“其他”）
+
++FILE_TYPE_NAMES: list[str] = list(FILE_CATEGORY_ORDER)
+
++
+
++# 未匹配扩展名/无扩展名 → 其他
+
++DEFAULT_CATEGORY: str = "其他"
+
+ 
+
+ 
+
+-def classify(text, keywords=None):
+
++def _normalize(ext: str) -> str:
+
++    """把各种形式的扩展名规整为“不含点、小写、仅最后一段”。
+
++
+
++    兼容 '.pdf' / 'PDF' / 'archive.tar.gz' / 'dir/file.JPG' 等输入。
+
+     """
+
+-    基于关键词加权打分分类。
+
+-    返回 (category, score, matched_words)。
+
+-    """
+
+-    if not text:
+
+-        return DEFAULT_CATEGORY, 0.0, []
+
+-    low_text = text.lower()
+
+-    scores = {}
+
+-    matched = {}
+
+-    for cat, words in CATEGORIES.items():
+
+-        score = 0.0
+
+-        hits = []
+
+-        for word, weight in words.items():
+
+-            w = word.lower()
+
+-            cnt = low_text.count(w)
+
+-            if cnt > 0:
+
+-                s = weight * (1.0 + 0.5 * min(cnt, 4))
+
+-                score += s
+
+-                hits.append(word)
+
+-        if score > 0:
+
+-            scores[cat] = score
+
+-            matched[cat] = hits
+
+-
+
+-    if not scores:
+
+-        return DEFAULT_CATEGORY, 0.0, []
+
+-
+
+-    best = max(scores, key=scores.get)
+
+-    best_score = scores[best]
+
+-    second_score = sorted(scores.values(), reverse=True)[1] if len(scores) > 1 else 0
+
+-
+
+-    # 阈值：至少 2 个命中词且总分 >= 5
+
+-    if len(matched[best]) < 2 or best_score < 5:
+
+-        return DEFAULT_CATEGORY, best_score, matched[best]
+
+-
+
+-    # 平局：与第二名差距 < 15% 且绝对差距 < 3（避免多主题文档误伤）
+
+-    tie = second_score > 0 and (best_score - second_score) < max(1.0, best_score * 0.15)
+
+-    if tie:
+
+-        return DEFAULT_CATEGORY, best_score, matched[best]
+
+-    return best, best_score, matched[best]
+
++    if not ext:
+
++        return ""
+
++    s = str(ext).strip().lower().replace("\\", "/")
+
++    s = s.rsplit("/", 1)[-1]
+
++    if "." in s:
+
++        s = s.rsplit(".", 1)[-1]
+
++    return s
+
+ 
+
+ 
+
+-def build_tags(keywords, category):
+
+-    """标签 = 关键词 + 类别。"""
+
+-    tags = list(keywords)
+
+-    if category != DEFAULT_CATEGORY:
+
+-        tags.append(category)
+
++def classify_by_ext(ext: str) -> str:
+
++    """按文件扩展名归类为文件类型。
+
++
+
++    Args:
+
++        ext: 扩展名或文件名，如 '.pdf'、'pdf'、'报告.PDF'、'a.tar.gz'。
+
++
+
++    Returns:
+
++        文件类型中文名；无法识别/无扩展名时返回 DEFAULT_CATEGORY（其他）。
+
++    """
+
++    key = _normalize(ext)
+
++    if not key:
+
++        return DEFAULT_CATEGORY
+
++    return _EXT_TO_CATEGORY.get(key, DEFAULT_CATEGORY)
+
++
+
++
+
++def build_tags(keywords: list[str] | None, category: str | None = None) -> list[str]:
+
++    """生成文档标签列表。
+
++
+
++    新版 category 语义为「文件类型」（文档/图片/...），是文件固有属性而非常规
+
++    内容标签，因此不再把 category 追加进 tags，避免文件类型标签淹没关键词云。
+
++    仅返回去重后的内容关键词。
+
++
+
++    Args:
+
++        keywords: 内容关键词（可空）。
+
++        category: 保留兼容参数（新逻辑不再使用）。
+
++
+
++    Returns:
+
++        去重后的标签列表。
+
++    """
+
++    tags: list[str] = []
+
++    for kw in (keywords or []):
+
++        t = str(kw).strip()
+
++        if t and t not in tags:
+
++            tags.append(t)
+
+     return tags
+```
+
+**文件:** `backend/parser.py`
+```diff
+--- backend/parser.py
++++ backend/parser.py
+@@ -6,9 +6,20 @@
+ from html.parser import HTMLParser
+
+ 
+
++# 无文本可提取的媒体/压缩包扩展名：入库时不走文本解析，直接返回空文本
+
++# （视频 + 音频 + 压缩包）。这些二进制文件绝不能被当作文本读取。
+
++MEDIA_NO_TEXT_EXTS = {
+
++    # 视频
+
++    ".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm", ".m4v", ".3gp",
+
++    # 音频
+
++    ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".m4a", ".opus",
+
++    # 压缩包
+
++    ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
+
++}
+
++
+
+ SUPPORTED_EXTS = {
+
+     ".pdf", ".docx", ".md", ".markdown", ".txt", ".html", ".htm",
+
+     ".xlsx", ".xls", ".pptx",
+
+     ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif", ".gif",
+
+-}
+
++} | MEDIA_NO_TEXT_EXTS
+
+ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif", ".gif"}
+
+ 
+
+@@ -196,4 +207,7 @@
+     ext = os.path.splitext(path)[1].lower()
+
+     base = os.path.splitext(os.path.basename(path))[0]
+
++    # 无文本媒体（视频/音频/压缩包）：直接返回空文本，严禁把二进制当文本读
+
++    if ext in MEDIA_NO_TEXT_EXTS:
+
++        return "", base
+
+     if ext == ".pdf":
+
+         text = _parse_pdf(path)
+```
+
+**文件:** `backend/security/auth.py`
+```diff
+--- backend/security/auth.py
++++ backend/security/auth.py
+@@ -332,5 +332,5 @@
+                     crypto.enc_field(dek, r["filename"] or ""),
+
+                     crypto.enc_field(dek, r["title"] or ""),
+
+-                    crypto.enc_field(dek, r["category"] or "未分类"),
+
++                    crypto.enc_field(dek, r["category"] or "其他"),
+
+                     crypto.enc_field(dek, r["tags"] or "[]"),
+
+                     crypto.enc_field(dek, r["keywords"] or "[]"),
+```
+
+**文件:** `backend/store.py`
+```diff
+--- backend/store.py
++++ backend/store.py
+@@ -34,5 +34,5 @@
+     ext         TEXT DEFAULT '',
+
+     title       TEXT DEFAULT '',
+
+-    category    TEXT DEFAULT '未分类',
+
++    category    TEXT DEFAULT '其他',
+
+     tags        TEXT DEFAULT '[]',
+
+     keywords    TEXT DEFAULT '[]',
+
+@@ -364,5 +364,5 @@
+     counts = {}
+
+     for r in rows:
+
+-        cat = vault.dec_row(dek, dict(r)).get("category") or "未分类"
+
++        cat = vault.dec_row(dek, dict(r)).get("category") or "其他"
+
+         counts[cat] = counts.get(cat, 0) + 1
+
+     total = sum(counts.values())
+```
+
+**文件:** `frontend/app.js`
+```diff
+--- frontend/app.js
++++ frontend/app.js
+@@ -2,15 +2,13 @@
+ "use strict";
+
+ 
+
+-/* ---------- 分类颜色 ---------- */
+
++/* ---------- 分类颜色（文件类型） ---------- */
+
+ const CAT_COLORS = {
+
+-  "技术开发": "#0a84ff",
+
+-  "人工智能": "#bf5af2",
+
+-  "金融投资": "#ff9f0a",
+
+-  "营销运营": "#ff375f",
+
+-  "教育学习": "#30d158",
+
+-  "健康养生": "#64d2ff",
+
+-  "职场管理": "#ffd60a",
+
+-  "生活随笔": "#ff9f0a",
+
+-  "未分类": "#8e8e93",
+
++  "文档": "#0a84ff",
+
++  "图片": "#30d158",
+
++  "视频": "#ff375f",
+
++  "音频": "#ff9f0a",
+
++  "压缩包": "#ffd60a",
+
++  "代码": "#bf5af2",
+
++  "其他": "#8e8e93",
+
+ };
+
+ const EXT_META = {
+
+@@ -22,4 +20,16 @@
+   bmp: ["IMG", "#bf5af2"], webp: ["IMG", "#bf5af2"], tiff: ["IMG", "#bf5af2"],
+
+   tif: ["IMG", "#bf5af2"], gif: ["IMG", "#bf5af2"],
+
++  // 视频
+
++  mp4: ["MP4", "#ff375f"], mkv: ["MKV", "#ff375f"], mov: ["MOV", "#ff375f"],
+
++  avi: ["AVI", "#ff375f"], webm: ["WEBM", "#ff375f"], m4v: ["M4V", "#ff375f"],
+
++  wmv: ["WMV", "#ff375f"], flv: ["FLV", "#ff375f"], "3gp": ["3GP", "#ff375f"],
+
++  // 音频
+
++  mp3: ["MP3", "#ff9f0a"], wav: ["WAV", "#ff9f0a"], flac: ["FLAC", "#ff9f0a"],
+
++  aac: ["AAC", "#ff9f0a"], m4a: ["M4A", "#ff9f0a"], ogg: ["OGG", "#ff9f0a"],
+
++  opus: ["OPUS", "#ff9f0a"], wma: ["WMA", "#ff9f0a"],
+
++  // 压缩包
+
++  zip: ["ZIP", "#ffd60a"], rar: ["RAR", "#ffd60a"], "7z": ["7Z", "#ffd60a"],
+
++  tar: ["TAR", "#ffd60a"], gz: ["GZ", "#ffd60a"], bz2: ["BZ2", "#ffd60a"],
+
++  xz: ["XZ", "#ffd60a"],
+
+ };
+
+ const DEFAULT_EXT = ["FILE", "#636366"];
+
+@@ -177,5 +187,5 @@
+   const nav = $("catNav");
+
+   const counts = { "全部": total, ...state.categories };
+
+-  const order = ["全部", "技术开发", "人工智能", "金融投资", "营销运营", "教育学习", "健康养生", "职场管理", "生活随笔", "未分类"];
+
++  const order = ["全部", "文档", "图片", "视频", "音频", "压缩包", "代码", "其他"];
+
+   const cats = order.filter((c) => counts[c] !== undefined);
+
+   nav.innerHTML = cats
+
+@@ -251,5 +261,5 @@
+     } else {
+
+       $("emptyTitle").textContent = "还没有文档";
+
+-      $("emptySub").textContent = "把收藏的报告、笔记拖进来，自动总结并分类";
+
++      $("emptySub").textContent = "拖入文档 / 图片 / 视频 / 音频 / 压缩包，自动归类并管理";
+
+     }
+
+     return;
+
+@@ -261,5 +271,5 @@
+       const ext = (d.ext || "").replace(".", "").toLowerCase();
+
+       const [label, color] = EXT_META[ext] || DEFAULT_EXT;
+
+-      const cat = d.category || "未分类";
+
++      const cat = d.category || "其他";
+
+       const kw = (d.keywords || []).slice(0, 3);
+
+       const title = hl(d.title || d.filename, state.q);
+
+@@ -360,5 +370,5 @@
+ async function uploadFiles(fileList) {
+
+   const files = Array.from(fileList).filter(
+
+-    (f) => /\.(pdf|docx|md|markdown|txt|html|htm|xlsx|xls|pptx|png|jpg|jpeg|bmp|webp|tiff|tif|gif)$/i.test(f.name)
+
++    (f) => /\.(pdf|docx|md|markdown|txt|html|htm|xlsx|xls|pptx|png|jpg|jpeg|bmp|webp|tiff|tif|gif|mp4|avi|mov|wmv|flv|mkv|webm|m4v|3gp|mp3|wav|aac|flac|ogg|wma|m4a|opus|zip|rar|7z|tar|gz|bz2|xz)$/i.test(f.name)
+
+   );
+
+   if (files.length !== fileList.length) toast("已忽略不支持的文件类型");
+
+@@ -387,5 +397,12 @@
+ /* ---------- 详情抽屉（焦点管理 + 键盘闭环） ---------- */
+
+ const PREVIEW_IMAGE = new Set(["png", "jpg", "jpeg", "bmp", "webp", "tiff", "tif", "gif"]);
+
+-const PREVIEW_NO = new Set(["xlsx", "xls", "pptx"]);
+
++const PREVIEW_NO = new Set([
+
++  // Office：下载查看
+
++  "xlsx", "xls", "pptx",
+
++  // 视频 / 音频 / 压缩包：无文本预览，统一提示下载
+
++  "mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp",
+
++  "mp3", "wav", "aac", "flac", "ogg", "wma", "m4a", "opus",
+
++  "zip", "rar", "7z", "tar", "gz", "bz2", "xz",
+
++]);
+
+ 
+
+ /* 源文件预览：fetch 带鉴权头取 blob → objectURL（img/iframe 无法带自定义 header） */
+
+@@ -418,5 +435,5 @@
+ function renderDrawer(d) {
+
+   const body = $("drawerBody");
+
+-  const cat = d.category || "未分类";
+
++  const cat = d.category || "其他";
+
+   const kw = d.keywords || [];
+
+   const tags = d.tags || [];
+```
+
+**文件:** `frontend/index.html`
+```diff
+--- frontend/index.html
++++ frontend/index.html
+@@ -266,5 +266,5 @@
+ 
+
+     <div class="sidebar-foot">
+
+-      <div class="drop-hint">把报告 / 笔记拖进窗口即可入库</div>
+
++      <div class="drop-hint">把文档 / 图片 / 视频 / 压缩包拖进窗口即可入库</div>
+
+     </div>
+
+   </aside>
+
+@@ -313,5 +313,5 @@
+         <div class="drop-icon">📥</div>
+
+         <div class="drop-title">松开导入文档</div>
+
+-        <div class="drop-sub">支持 PDF / Word / Markdown / TXT / HTML</div>
+
++        <div class="drop-sub">支持 文档 / 图片 / 视频 / 音频 / 压缩包 / 代码</div>
+
+       </div>
+
+     </div>
+
+@@ -327,5 +327,5 @@
+         <div class="empty-icon">🗂️</div>
+
+         <div class="empty-title" id="emptyTitle">还没有文档</div>
+
+-        <div class="empty-sub" id="emptySub">把收藏的报告、笔记拖进来，自动总结并分类</div>
+
++        <div class="empty-sub" id="emptySub">拖入文档 / 图片 / 视频 / 音频 / 压缩包，自动归类并管理</div>
+
+         <button class="reset-btn" id="resetFilter" hidden>清除筛选条件</button>
+
+       </div>
+
+@@ -424,5 +424,5 @@
+ <div class="toast" id="toast" hidden></div>
+
+ 
+
+-<input type="file" id="fileInput" multiple accept=".pdf,.docx,.md,.markdown,.txt,.html,.htm,.xlsx,.xls,.pptx,.png,.jpg,.jpeg,.bmp,.webp,.tiff,.tif,.gif" hidden>
+
++<input type="file" id="fileInput" multiple accept=".pdf,.docx,.md,.markdown,.txt,.html,.htm,.xlsx,.xls,.pptx,.png,.jpg,.jpeg,.bmp,.webp,.tiff,.tif,.gif,.mp4,.avi,.mov,.wmv,.flv,.mkv,.webm,.m4v,.3gp,.mp3,.wav,.aac,.flac,.ogg,.wma,.m4a,.opus,.zip,.rar,.7z,.tar,.gz,.bz2,.xz" hidden>
+
+ 
+
+ <script src="app.js?v=5"></script>
+```
+
+**文件:** `tools/reclassify_ext.py`（新增文件）
+```diff
+--- /dev/null
++++ tools/reclassify_ext.py
+@@ -0,0 +1,356 @@
++# -*- coding: utf-8 -*-
++"""存量文档重分类工具：按文件扩展名更新 documents 的 category/tags。
++
++背景
++====
++早期版本把文档按「内容主题 8 大类」分类并存入 documents.category / tags。
++本次把自动分类改为「按文件扩展名归类为文件类型」（文档/图片/视频/音频/压缩包/
++代码/其他）。本工具用于将存量文档（此前按主题分类入库的数据）统一改为按扩展名
++归类，只更新 category 与 tags 两列，绝不动文件本体、内容、keywords 等其他字段。
++
++数据红线（务必遵守）
++====================
++1) 仅更新 documents.category 与 documents.tags 两列。
++2) 执行前自动把 knowledge.db 备份到同目录（带时间戳副本），不删除原库。
++3) 数据与程序本体隔离：默认连接 KB_DATA_DIR（环境变量）指向的数据库；
++   也可用 --db / --data-dir 显式指定外置库。
++4) 敏感列（category/tags/keywords/...）在库内为密文（enc_ver=1，AES-GCM）。
++   因此本工具需要账号密码解开该用户 DEK，先解密再按扩展名重算，再加密写回。
++
++用法
++====
++  # 预览（不写库）：列出将变化的行数、旧→新分布
++  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --dry-run
++
++  # 正式执行（自动备份后写库）
++  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --yes
++  # 指定用户名（默认询问；单用户环境通常为 king）
++  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --username king --yes
++"""
++from __future__ import annotations
++
++import argparse
++import base64
++import getpass
++import json
++import os
++import sqlite3
++import sys
++from collections import Counter, defaultdict
++from datetime import datetime
++
++# Windows 控制台默认 GBK 无法输出中文时转为 UTF-8，避免脚本报 UnicodeEncodeError
++try:
++    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
++    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
++except Exception:
++    pass
++
++# 允许从项目根直接以 `python tools/reclassify_ext.py` 运行
++BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++if BASE not in sys.path:
++    sys.path.insert(0, BASE)
++
++from backend import classify
++from backend.security import auth, crypto  # noqa: E402
++
++# 早期「内容主题」类别名：存量 tags 中若混入这些标签，重分类时剔除
++_LEGACY_TOPIC_NAMES = frozenset({
++    "技术开发", "人工智能", "金融投资", "营销运营", "教育学习",
++    "健康养生", "职场管理", "生活随笔", "未分类",
++})
++# 文件类型名同样不作为内容标签保留
++_FILE_TYPE_NAMES = frozenset(classify.FILE_TYPE_NAMES)
++
++
++def _now_stamp() -> str:
++    return datetime.now().strftime("%Y%m%d_%H%M%S")
++
++
++def resolve_db_path(args) -> str:
++    """解析数据库路径：--db > --data-dir > 环境 KB_DATA_DIR > 项目内 data/。"""
++    if getattr(args, "db", None):
++        return os.path.abspath(args.db)
++    data_dir = getattr(args, "data_dir", None) or os.environ.get("KB_DATA_DIR", "").strip()
++    if not data_dir:
++        data_dir = os.path.join(BASE, "data")
++    return os.path.join(os.path.abspath(data_dir), "knowledge.db")
++
++
++def backup_db(db_path: str) -> str:
++    """同目录生成带时间戳的 SQLite 一致性备份，返回备份路径。"""
++    if not os.path.exists(db_path):
++        raise FileNotFoundError(f"数据库不存在: {db_path}")
++    backup_path = os.path.join(
++        os.path.dirname(db_path),
++        f"knowledge_{_now_stamp()}_reclass.bak.db",
++    )
++    src = sqlite3.connect(db_path)
++    try:
++        dst = sqlite3.connect(backup_path)
++        try:
++            with dst:
++                src.backup(dst)
++        finally:
++            dst.close()
++    finally:
++        src.close()
++    return backup_path
++
++
++def list_users(conn: sqlite3.Connection) -> list[dict]:
++    conn.row_factory = sqlite3.Row
++    rows = conn.execute(
++        """SELECT u.id, u.username, u.role,
++                  (SELECT COUNT(*) FROM documents d WHERE d.user_id = u.id) AS doc_count
++           FROM users u ORDER BY u.id"""
++    ).fetchall()
++    return [dict(r) for r in rows]
++
++
++def fetch_docs(conn: sqlite3.Connection, user_id: int) -> list[dict]:
++    conn.row_factory = sqlite3.Row
++    rows = conn.execute(
++        """SELECT id, stored_name, ext, filename, category, tags, keywords, enc_ver
++           FROM documents WHERE user_id=? ORDER BY id""",
++        (user_id,),
++    ).fetchall()
++    return [dict(r) for r in rows]
++
++
++def resolve_user_dek(conn: sqlite3.Connection, username: str, password: str) -> bytes:
++    """按登录同款流程解出该用户 DEK：KEK=Argon2id(password,salt) → 解 wrapped_dek。"""
++    conn.row_factory = sqlite3.Row
++    row = conn.execute(
++        "SELECT salt_kek, wrapped_dek, dek_check FROM users WHERE username=?",
++        (username,),
++    ).fetchone()
++    if row is None:
++        raise ValueError(f"用户不存在: {username}")
++    try:
++        kek = auth._derive_kek(password, row["salt_kek"])
++        dek = crypto.dec_bytes(kek, base64.b64decode(row["wrapped_dek"]))
++    except Exception:
++        raise PermissionError("密码错误，无法解开该用户密钥")
++    if not crypto.verify_dek(dek, row["dek_check"]):
++        raise PermissionError("密钥自检失败：请确认账号密码正确")
++    return dek
++
++
++def _ext_of_stored(stored_name: str, ext_col: str, filename: str) -> str:
++    """优先 stored_name（服务端生成的存储名，扩展名可靠），其次 ext 列/原始文件名。"""
++    for src in (stored_name or "", filename or ""):
++        name = src.strip()
++        if name:
++            ext = os.path.splitext(name)[1]
++            if ext:
++                return ext
++    if ext_col:
++        return ext_col
++    return ""
++
++
++def compute_new_tags(old_tags: list[str]) -> list[str]:
++    """剔除旧主题标签与文件类型名，保留真正的关键词标签。"""
++    out: list[str] = []
++    for t in old_tags or []:
++        s = str(t).strip()
++        if not s or s in _LEGACY_TOPIC_NAMES or s in _FILE_TYPE_NAMES:
++            continue
++        if s not in out:
++            out.append(s)
++    return out
++
++
++def plan_doc(doc: dict, dek: bytes) -> dict:
++    """对单篇文档计算重分类方案。
++
++    仅解密读取 category/tags 以规划新值；keywords 仅用于观测，不修改。
++    返回 {doc, old_category, old_tags, new_category, new_tags, changed}
++    """
++    decrypted = None
++    enc_ver = doc.get("enc_ver") or 0
++    if enc_ver == 1:
++        row = dict(doc)
++        from backend.security import vault
++        decrypted = vault.dec_row(dek, row)
++    else:
++        # enc_ver != 1（正常经过启动迁移后应不存在）：category/tags 可能明文或异常
++        raise RuntimeError(
++            f"文档 id={doc['id']} enc_ver={enc_ver} 非预期（期望 1）。"
++            "请先正常启动一次服务完成旧库迁移，再执行重分类。"
++        )
++
++    old_category = decrypted.get("category") or classify.DEFAULT_CATEGORY
++    old_tags = decrypted.get("tags") or []
++    ext = _ext_of_stored(doc.get("stored_name") or "", doc.get("ext") or "",
++                         decrypted.get("filename") or "")
++    new_category = classify.classify_by_ext(ext)
++    new_tags = compute_new_tags(old_tags)
++    changed = (new_category != old_category) or (new_tags != old_tags)
++    return {
++        "doc": doc,
++        "old_category": old_category,
++        "old_tags": old_tags,
++        "new_category": new_category,
++        "new_tags": new_tags,
++        "changed": changed,
++        "enc_ver": enc_ver,
++    }
++
++
++def encode_fields(dek: bytes, new_category: str, new_tags: list[str]) -> tuple[str, str]:
++    """把新 category/tags 加密为库内密文（tags 先 JSON 序列化）。"""
++    cat_raw = crypto.enc_field(dek, new_category)
++    tags_raw = crypto.enc_field(dek, json.dumps(new_tags, ensure_ascii=False))
++    return cat_raw, tags_raw
++
++
++def write_doc(conn: sqlite3.Connection, doc_id: int, dek: bytes,
++              new_category: str, new_tags: list[str]) -> None:
++    cat_raw, tags_raw = encode_fields(dek, new_category, new_tags)
++    conn.execute(
++        "UPDATE documents SET category=?, tags=? WHERE id=?",
++        (cat_raw, tags_raw, doc_id),
++    )
++
++
++def summarize(plans: list[dict]) -> dict:
++    transitions = Counter()
++    new_counts = Counter()
++    old_counts = Counter()
++    changed_ids = []
++    for p in plans:
++        old_counts[p["old_category"]] += 1
++        new_counts[p["new_category"]] += 1
++        if p["changed"]:
++            transitions[(p["old_category"], p["new_category"])] += 1
++            changed_ids.append(p["doc"]["id"])
++    return {
++        "total": len(plans),
++        "changed": len(changed_ids),
++        "unchanged": len(plans) - len(changed_ids),
++        "old_counts": old_counts,
++        "new_counts": new_counts,
++        "transitions": transitions,
++        "changed_ids": changed_ids,
++    }
++
++
++def print_summary(summary: dict, dry_run: bool) -> None:
++    mode = "DRY-RUN（仅预览，未写库）" if dry_run else "已写库"
++    print(f"\n===== 重分类结果 [{mode}] =====")
++    print(f"存量文档总数      : {summary['total']}")
++    print(f"需要更新(category或tags变化): {summary['changed']}")
++    print(f"无需变化          : {summary['unchanged']}")
++    if summary["total"] == 0:
++        return
++    print("\n[按扩展名归类后的新分布]")
++    for cat in classify.FILE_CATEGORY_ORDER:
++        if summary["new_counts"][cat]:
++            print(f"  {cat:<4}: {summary['new_counts'][cat]}")
++    print("\n[旧分布]")
++    for cat, n in summary["old_counts"].most_common():
++        print(f"  {cat:<4}: {n}")
++    print("\n[主题→文件类型迁移明细(仅发生变化的)]")
++    for (old, new), n in sorted(summary["transitions"].items(), key=lambda x: -x[1]):
++        if n:
++            print(f"  {old} -> {new} : {n}")
++
++
++def main() -> int:
++    ap = argparse.ArgumentParser(description="存量文档按扩展名重分类（只动 category/tags，执行前自动备份）")
++    ap.add_argument("--db", default=None, help="直接指定 knowledge.db 路径（优先级最高）")
++    ap.add_argument("--data-dir", default=None,
++                    help="数据目录（含 knowledge.db 与 documents/；默认取 KB_DATA_DIR 环境变量，未设置则项目 data/）")
++    ap.add_argument("--username", default=None, help="要处理的用户名（默认交互询问）")
++    ap.add_argument("--password", default=None, help="该用户密码（不建议明文传参，默认交互输入）")
++    ap.add_argument("--dry-run", action="store_true", help="仅预览影响行数与分布，不写库、不备份")
++    ap.add_argument("--yes", action="store_true", help="跳过确认提示（正式写库仍会自动备份）")
++    args = ap.parse_args()
++
++    db_path = resolve_db_path(args)
++    if not os.path.exists(db_path):
++        print(f"[错误] 数据库不存在: {db_path}\n提示：可用 --data-dir 或 --db 指定外置数据目录。")
++        return 2
++    print(f"[信息] 使用数据库: {db_path}")
++
++    conn = sqlite3.connect(db_path)
++    try:
++        users = list_users(conn)
++        if not users:
++            print("[错误] 库中无用户，无法继续。")
++            return 2
++        username = (args.username or "").strip()
++        if not username:
++            print("可选用户: " + ", ".join(f"{u['username']}(文档{u['doc_count']})" for u in users))
++            username = input("输入要处理的用户名: ").strip() or (users[0]["username"] if len(users) == 1 else "")
++        target = next((u for u in users if u["username"] == username.lower()), None)
++        if target is None:
++            print(f"[错误] 用户不存在: {username}")
++            return 2
++        print(f"[信息] 处理用户: {target['username']}（角色 {target['role']}，文档 {target['doc_count']} 条）")
++
++        docs = fetch_docs(conn, target["id"])
++        if not docs:
++            print("[信息] 该用户没有存量文档，无需重分类。")
++            print_summary({"total": 0, "changed": 0, "unchanged": 0,
++                           "old_counts": Counter(), "new_counts": Counter(),
++                           "transitions": Counter()}, dry_run=args.dry_run)
++            return 0
++
++        password = args.password
++        if password is None:
++            password = getpass.getpass(f"输入用户 {target['username']} 的密码（仅用于内存解开DEK）: ")
++        if not password:
++            print("[错误] 未提供密码，无法解密存量数据。")
++            return 2
++        dek = resolve_user_dek(conn, target["username"], password)
++
++        plans = []
++        for doc in docs:
++            try:
++                plans.append(plan_doc(doc, dek))
++            except RuntimeError as e:
++                print(f"[跳过] {e}")
++        summary = summarize(plans)
++        print_summary(summary, dry_run=args.dry_run)
++
++        if summary["changed"] == 0:
++            print("\n[信息] 无变化，无需写库。")
++            return 0
++        if args.dry_run:
++            print("\n[提示] 已加 --dry-run，未写库、未备份。去掉 --dry-run 并加 --yes 正式执行。")
++            return 0
++
++        if not args.yes:
++            ans = input(f"\n将更新 {summary['changed']} 条文档的 category/tags，"
++                        f"执行前自动备份 knowledge.db。确认执行？[y/N] ").strip().lower()
++            if ans not in ("y", "yes"):
++                print("已取消。")
++                return 0
++
++        backup_path = backup_db(db_path)
++        print(f"[备份] knowledge.db -> {backup_path}")
++
++        conn.execute("BEGIN")
++        try:
++            for p in plans:
++                if p["changed"]:
++                    write_doc(conn, p["doc"]["id"], dek, p["new_category"], p["new_tags"])
++            conn.commit()
++        except Exception:
++            conn.rollback()
++            raise
++        print(f"[完成] 已更新 {summary['changed']} 条文档（category/tags）。")
++    finally:
++        conn.close()
++    return 0
++
++
++if __name__ == "__main__":
++    try:
++        sys.exit(main())
++    except KeyboardInterrupt:
++        print("\n已取消。")
++        sys.exit(130)
+```
+
+
+---
+
 ### 2026-09-02 12:30:40 | 安全审计与加固：CORS收紧/安全响应头/关闭API文档/IP限流/锁定消息模糊化/上传限制/路径穿越防御/审计记录来源IP
 
 **文件:** `app.py`
@@ -813,7 +2013,6 @@
 +        return "loopback"
 +    return host
 ```
-
 
 ---
 
@@ -2856,348 +4055,4 @@
  /* ============ 主区域 ============ */
 
  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-```
-
----
-
-### 2026-09-02 11:09:29 | 新增增量备份工具：tools/backup.py（内容寻址对象库，sha256 去重 + 快照清单，跨版本零冗余；支持 backup/list/restore/prune，SQLite 用 backup API 保证运行中一致性，不依赖 Git/境外网络）+ 根目录备份.bat 一键双击备份
-
-**文件:** `tools\backup.py`（新增文件）
-```diff
---- /dev/null
-+++ tools\backup.py
-@@ -0,0 +1,309 @@
-+# -*- coding: utf-8 -*-
-+"""
-+知识工作台 · 增量备份工具（零依赖 · 纯本地 · 不依赖 Git）
-+==========================================================
-+内容寻址对象库（git 对象模型的极简版）。省空间三招：
-+
-+  1) 内容去重：每个文件按 sha256 内容指纹存储，相同内容跨快照只存一份
-+  2) 快照即清单：每次备份只生成一个 JSON 清单（路径 -> 对象ID），
-+     文件没变时仅追加几百字节引用，不复制任何字节
-+  3) 自动裁剪：prune 删除最旧快照并回收无人引用的孤儿对象
-+
-+用法:
-+  python tools/backup.py backup  [--comment "说明"] [--dir 备份根]   # 一键备份
-+  python tools/backup.py list   [--dir 备份根]                      # 查看快照
-+  python tools/backup.py restore <快照名> [--to 目标目录] [--dir 备份根]  # 恢复
-+  python tools/backup.py prune  --keep 10 [--dir 备份根]            # 只留最近 N 份
-+
-+备份根默认 <项目根>/backup/，--dir 可指向其他位置（U 盘 / 网盘同步目录）。
-+knowledge.db 等 SQLite 文件用 Online Backup API 生成一致性副本，运行中备份也安全。
-+"""
-+import os
-+import sys
-+import json
-+import shutil
-+import hashlib
-+import tempfile
-+import argparse
-+from datetime import datetime
-+
-+try:
-+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-+except Exception:
-+    pass
-+
-+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-+DEFAULT_BACKUP_ROOT = os.path.join(BASE, "backup")
-+CHUNK = 1 << 20  # 1MB 分块，大文件不占内存
-+
-+
-+# ---------- 排除规则 ----------
-+def is_ignored(rel: str) -> bool:
-+    rel = rel.replace("\\", "/").strip("/")
-+    if not rel:
-+        return True
-+    if rel == "backup" or rel.startswith("backup/"):
-+        return True  # 备份根自身（默认位置）
-+    if rel == ".workbuddy" or rel.startswith(".workbuddy/"):
-+        return True
-+    if rel == "data/changelog_staging" or rel.startswith("data/changelog_staging/"):
-+        return True
-+    parts = rel.split("/")
-+    if "__pycache__" in parts or rel.endswith(".pyc"):
-+        return True
-+    return False
-+
-+
-+def _fmt(n):
-+    for unit in ("B", "KB", "MB", "GB"):
-+        if n < 1024 or unit == "GB":
-+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
-+        n /= 1024
-+
-+
-+def _sha256(path: str) -> str:
-+    h = hashlib.sha256()
-+    with open(path, "rb") as f:
-+        for chunk in iter(lambda: f.read(CHUNK), b""):
-+            h.update(chunk)
-+    return h.hexdigest()
-+
-+
-+def _obj_path(root: str, oid: str) -> str:
-+    return os.path.join(root, "objects", oid[:2], oid[2:])
-+
-+
-+def _store_object(root: str, src: str, oid: str) -> None:
-+    dst = _obj_path(root, oid)
-+    if os.path.exists(dst):
-+        return  # 内容已存在：去重，零写入
-+    os.makedirs(os.path.dirname(dst), exist_ok=True)
-+    tmp = dst + ".tmp"
-+    shutil.copyfile(src, tmp)
-+    os.replace(tmp, dst)  # 原子提交
-+
-+
-+def _ingest(root: str, path: str, rel: str) -> dict:
-+    """收进对象库；SQLite 走 backup API 保证运行中备份的一致性。"""
-+    src, tmpdb = path, None
-+    if rel.lower().endswith((".db", ".sqlite", ".sqlite3")):
-+        try:
-+            import sqlite3
-+            tf = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-+            tf.close()
-+            tmpdb = tf.name
-+            s = sqlite3.connect(str(path))
-+            d = sqlite3.connect(tmpdb)
-+            with d:
-+                s.backup(d)
-+            s.close()
-+            d.close()
-+            src = tmpdb
-+        except Exception:
-+            tmpdb = None  # 非 SQLite 或失败：回退普通复制
-+    try:
-+        oid = _sha256(src)
-+        _store_object(root, src, oid)
-+        return {"oid": oid, "size": os.path.getsize(src),
-+                "mtime": os.path.getmtime(path)}
-+    finally:
-+        if tmpdb:
-+            try:
-+                os.unlink(tmpdb)
-+            except OSError:
-+                pass
-+
-+
-+def _list_snapshots(root: str):
-+    d = os.path.join(root, "snapshots")
-+    if not os.path.isdir(d):
-+        return []
-+    return sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith(".json"))
-+
-+
-+def _store_size(root: str) -> int:
-+    od = os.path.join(root, "objects")
-+    total = 0
-+    if os.path.isdir(od):
-+        for dp, _, fns in os.walk(od):
-+            for fn in fns:
-+                try:
-+                    total += os.path.getsize(os.path.join(dp, fn))
-+                except OSError:
-+                    pass
-+    return total
-+
-+
-+# ---------- 子命令 ----------
-+def cmd_backup(args):
-+    root = args.dir
-+    os.makedirs(os.path.join(root, "objects"), exist_ok=True)
-+    os.makedirs(os.path.join(root, "snapshots"), exist_ok=True)
-+
-+    files, total = {}, 0
-+    for dirpath, dirnames, filenames in os.walk(BASE):
-+        dirnames[:] = [d for d in dirnames if not is_ignored(
-+            os.path.relpath(os.path.join(dirpath, d), BASE))]
-+        for fn in filenames:
-+            full = os.path.join(dirpath, fn)
-+            rel = os.path.relpath(full, BASE)
-+            if is_ignored(rel):
-+                continue
-+            info = _ingest(root, full, rel)
-+            files[rel.replace("\\", "/")] = info
-+            total += info["size"]
-+
-+    name = datetime.now().strftime("%Y%m%d_%H%M%S")
-+    snap = os.path.join(root, "snapshots", name + ".json")
-+    i = 2
-+    while os.path.exists(snap):
-+        snap = os.path.join(root, "snapshots", f"{name}_{i}.json")
-+        i += 1
-+    prev = _latest(root)  # 必须在写入前取上一快照，否则会对比到自身
-+    meta = {
-+        "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-+        "root": BASE,
-+        "comment": args.comment or "",
-+        "n_files": len(files),
-+        "total_size": total,
-+        "files": files,
-+    }
-+    with open(snap, "w", encoding="utf-8") as f:
-+        json.dump(meta, f, ensure_ascii=False, indent=1)
-+
-+    added = added_bytes = 0
-+    if prev:
-+        prev_objs = {i["oid"] for i in prev["files"].values()}
-+        for info in files.values():
-+            if info["oid"] not in prev_objs:
-+                added += 1
-+                added_bytes += info["size"]
-+
-+    print(f"  ✓ 备份完成: {os.path.basename(snap)[:-5]}")
-+    print(f"    文件 {len(files)} 个 / 逻辑大小 {_fmt(total)}")
-+    if prev:
-+        print(f"    相对上次: 新增/变更 {added} 个文件, 新增存储 {_fmt(added_bytes)}")
-+    else:
-+        print("    首次备份: 全量入库")
-+    print(f"    对象库物理占用: {_fmt(_store_size(root))}")
-+    print(f"    备份位置: {root}")
-+
-+
-+def _latest(root: str):
-+    snaps = _list_snapshots(root)
-+    if not snaps:
-+        return None
-+    with open(snaps[-1], encoding="utf-8") as f:
-+        return json.load(f)
-+
-+
-+def cmd_list(args):
-+    root = args.dir
-+    snaps = _list_snapshots(root)
-+    if not snaps:
-+        print("  (还没有备份快照) 运行: python tools/backup.py backup")
-+        return
-+    print(f"备份位置: {root}")
-+    print(f"对象库物理占用: {_fmt(_store_size(root))}")
-+    print("-" * 80)
-+    prev_objs = None
-+    for p in snaps:
-+        meta = json.load(open(p, encoding="utf-8"))
-+        name = os.path.basename(p)[:-5]
-+        objs = {i["oid"] for i in meta["files"].values()}
-+        chg = f"  (+{len(objs - prev_objs)} 文件变化)" if prev_objs is not None else "  (首次)"
-+        prev_objs = objs
-+        cmt = f"  「{meta.get('comment', '')}」" if meta.get("comment") else ""
-+        print(f"  {name}  {meta['n_files']} 文件 {_fmt(meta['total_size'])}{chg}{cmt}")
-+
-+
-+def cmd_restore(args):
-+    root = args.dir
-+    snap = args.snapshot if args.snapshot.endswith(".json") else args.snapshot + ".json"
-+    p = os.path.join(root, "snapshots", snap)
-+    if not os.path.exists(p):
-+        print(f"  ✗ 快照不存在: {snap}")
-+        sys.exit(1)
-+    meta = json.load(open(p, encoding="utf-8"))
-+    dst_root = os.path.abspath(args.to) if args.to else BASE
-+    print(f"  恢复快照 {os.path.basename(p)[:-5]} -> {dst_root}")
-+    n = 0
-+    for rel, info in meta["files"].items():
-+        full = os.path.realpath(os.path.join(dst_root, rel))
-+        if not full.startswith(os.path.realpath(dst_root) + os.sep):
-+            raise ValueError(f"非法路径: {rel}")
-+        os.makedirs(os.path.dirname(full), exist_ok=True)
-+        shutil.copy2(_obj_path(root, info["oid"]), full)
-+        if "mtime" in info:
-+            try:
-+                os.utime(full, (info["mtime"], info["mtime"]))
-+            except OSError:
-+                pass
-+        n += 1
-+    print(f"  ✓ 已恢复 {n} 个文件")
-+
-+
-+def cmd_prune(args):
-+    root = args.dir
-+    snaps = _list_snapshots(root)
-+    if len(snaps) <= args.keep:
-+        print(f"  当前 {len(snaps)} 份快照 ≤ 保留 {args.keep} 份，无需裁剪")
-+        return
-+    for p in snaps[:-args.keep]:
-+        os.remove(p)
-+        print(f"  - 删除快照 {os.path.basename(p)[:-5]}")
-+    keep_objs = set()
-+    for p in snaps[-args.keep:]:
-+        meta = json.load(open(p, encoding="utf-8"))
-+        keep_objs |= {i["oid"] for i in meta["files"].values()}
-+    od = os.path.join(root, "objects")
-+    freed = freed_bytes = 0
-+    if os.path.isdir(od):
-+        for d in os.listdir(od):
-+            dd = os.path.join(od, d)
-+            if not os.path.isdir(dd):
-+                continue
-+            for fn in os.listdir(dd):
-+                oid = d + fn
-+                if oid not in keep_objs:
-+                    try:
-+                        freed_bytes += os.path.getsize(os.path.join(dd, fn))
-+                        os.remove(os.path.join(dd, fn))
-+                        freed += 1
-+                    except OSError:
-+                        pass
-+            if not os.listdir(dd):
-+                try:
-+                    os.rmdir(dd)
-+                except OSError:
-+                    pass
-+    print(f"  ✓ 已清理孤儿对象 {freed} 个，释放 {_fmt(freed_bytes)}")
-+
-+
-+def main():
-+    ap = argparse.ArgumentParser(description="知识工作台增量备份工具")
-+    sub = ap.add_subparsers(dest="cmd", required=True)
-+
-+    def common(p):
-+        p.add_argument("--dir", default=DEFAULT_BACKUP_ROOT,
-+                       help=f"备份根目录(默认 {DEFAULT_BACKUP_ROOT})")
-+
-+    p1 = sub.add_parser("backup")
-+    common(p1)
-+    p1.add_argument("--comment", default="", help="本次备份说明")
-+    p2 = sub.add_parser("list")
-+    common(p2)
-+    p3 = sub.add_parser("restore")
-+    common(p3)
-+    p3.add_argument("snapshot", help="快照名，如 20260902_113000")
-+    p3.add_argument("--to", default=None, help="恢复目标目录(默认项目根)")
-+    p4 = sub.add_parser("prune")
-+    common(p4)
-+    p4.add_argument("--keep", type=int, default=10, help="保留最近 N 份快照(默认10)")
-+    args = ap.parse_args()
-+    {"backup": cmd_backup, "list": cmd_list,
-+     "restore": cmd_restore, "prune": cmd_prune}[args.cmd](args)
-+
-+
-+if __name__ == "__main__":
-+    main()
-```
-
-**文件:** `备份.bat`（新增文件）
-```diff
---- /dev/null
-+++ 备份.bat
-@@ -0,0 +1,17 @@
-+@echo off
-+chcp 65001 >nul
-+title 一键备份 · 个人知识管理工作台
-+cd /d "%~dp0"
-+
-+set PY=C:\Users\King\.workbuddy\binaries\python\envs\kb\Scripts\python.exe
-+if not exist "%PY%" set PY=python
-+
-+echo.
-+echo  ========================================
-+echo    增量备份（内容去重，相同文件不重复存储）
-+echo    备份位置: backup\
-+echo  ========================================
-+echo.
-+"%PY%" tools\backup.py backup %*
-+echo.
-+pause
 ```
