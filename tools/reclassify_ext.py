@@ -20,12 +20,12 @@
 用法
 ====
   # 预览（不写库）：列出将变化的行数、旧→新分布
-  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --dry-run
+  python tools/reclassify_ext.py --data-dir "<数据目录>" --dry-run
 
   # 正式执行（自动备份后写库）
-  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --yes
-  # 指定用户名（默认询问；单用户环境通常为 king）
-  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --username king --yes
+  python tools/reclassify_ext.py --data-dir "<数据目录>" --yes
+  # 指定用户名（默认询问）
+  python tools/reclassify_ext.py --data-dir "<数据目录>" --username <用户名> --yes
 """
 from __future__ import annotations
 
