@@ -15,9 +15,11 @@ import pythoncom
 import win32com.client
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY_DIR = os.path.join(os.path.dirname(sys.executable))  # 兼容：由 kb venv python 运行
-# 目标解释器固定指向 kb venv 的 pythonw（无窗口）
-PYTHONW = r"C:\Users\King\.workbuddy\binaries\python\envs\kb\Scripts\pythonw.exe"
+# 目标解释器：优先与当前解释器同目录的 pythonw.exe（无窗口），否则回退 sys.executable
+PY_DIR = os.path.dirname(sys.executable)
+PYTHONW = os.path.join(PY_DIR, "pythonw.exe")
+if not os.path.exists(PYTHONW):
+    PYTHONW = sys.executable
 LAUNCHER = os.path.join(BASE, "tools", "kb_launcher.py")
 ICON = os.path.join(BASE, "kb_icon.ico")
 LNK = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BASE, "知识工作台.lnk")
