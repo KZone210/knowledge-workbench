@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_size   INTEGER DEFAULT 0,
     ext         TEXT DEFAULT '',
     title       TEXT DEFAULT '',
-    category    TEXT DEFAULT '未分类',
+    category    TEXT DEFAULT '其他',
     tags        TEXT DEFAULT '[]',
     keywords    TEXT DEFAULT '[]',
     summary     TEXT DEFAULT '',
@@ -363,7 +363,7 @@ def category_counts(dek: bytes, user_id: int):
     conn.close()
     counts = {}
     for r in rows:
-        cat = vault.dec_row(dek, dict(r)).get("category") or "未分类"
+        cat = vault.dec_row(dek, dict(r)).get("category") or "其他"
         counts[cat] = counts.get(cat, 0) + 1
     total = sum(counts.values())
     return total, counts
