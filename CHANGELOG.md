@@ -864,12 +864,12 @@
 +用法
 +====
 +  # 预览（不写库）：列出将变化的行数、旧→新分布
-+  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --dry-run
++  python tools/reclassify_ext.py --data-dir "<数据目录>" --dry-run
 +
 +  # 正式执行（自动备份后写库）
-+  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --yes
-+  # 指定用户名（默认询问；单用户环境通常为 king）
-+  python tools/reclassify_ext.py --data-dir "D:/agent/知识工作台_数据" --username king --yes
++  python tools/reclassify_ext.py --data-dir "<数据目录>" --yes
++  # 指定用户名（默认询问；默认询问用户名）
++  python tools/reclassify_ext.py --data-dir "<数据目录>" --username <用户名> --yes
 +"""
 +from __future__ import annotations
 +
@@ -2016,7 +2016,7 @@
 
 ---
 
-### 2026-09-02 12:05:21 | 实现数据与程序本体隔离（根治更新程序后文件丢失）：新增 backend/paths.py 统一数据路径（环境变量 KB_DATA_DIR 优先，回落项目内 data/ 兼容旧部署）；store.py/auth.py 改走统一路径；用户数据已迁移至外置目录 D:/agent/知识工作台_数据（documents/knowledge.db/kbtest）；start.bat/start.sh 注入 KB_DATA_DIR；tools/backup.py 支持多根联合备份（外置数据以 kbdata/ 前缀并入快照，restore 自动拆分回数据目录）。app.py 本轮无代码变更
+### 2026-09-02 12:05:21 | 实现数据与程序本体隔离（根治更新程序后文件丢失）：新增 backend/paths.py 统一数据路径（环境变量 KB_DATA_DIR 优先，回落项目内 data/ 兼容旧部署）；store.py/auth.py 改走统一路径；用户数据已迁移至外置目录 <数据目录>（documents/knowledge.db/kbtest）；start.bat/start.sh 注入 KB_DATA_DIR；tools/backup.py 支持多根联合备份（外置数据以 kbdata/ 前缀并入快照，restore 自动拆分回数据目录）。app.py 本轮无代码变更
 
 **文件:** `backend\paths.py`（新增文件）
 ```diff
@@ -2158,15 +2158,15 @@
 --- start.bat
 +++ start.bat
 @@ -6,4 +6,8 @@
- set PY=C:\Users\King\.workbuddy\binaries\python\envs\kb\Scripts\python.exe
+ set PY=python
 
  if not exist "%PY%" set PY=python
 
 +
 
-+rem ===== 数据目录外置：程序与用户数据隔离（更新程序不影响数据）=====
++rem ===== 数据目录：优先 .kb_data_dir 配置，否则项目内 data/ =====
 
-+set KB_DATA_DIR=D:\agent\知识工作台_数据
++set KB_DATA_DIR=<数据目录>
 
 +if not exist "%KB_DATA_DIR%" mkdir "%KB_DATA_DIR%"
 
@@ -2186,7 +2186,7 @@
 
 +# 数据目录外置：程序与用户数据隔离（更新程序不影响数据）
 
-+export KB_DATA_DIR="D:/agent/知识工作台_数据"
++export KB_DATA_DIR="<数据目录>"
 
 +mkdir -p "$KB_DATA_DIR"
 
