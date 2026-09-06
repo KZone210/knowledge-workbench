@@ -20,6 +20,9 @@ env/
 server_run.err.log
 server_run.out.log
 
+# ===== 本机快捷方式（含绝对路径，不入库；make_shortcut.py 可重建）=====
+*.lnk
+
 # ===== 环境变量与密钥文件 =====
 .env
 .env.*
