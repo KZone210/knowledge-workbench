@@ -36,11 +36,11 @@
 ### 命令行
 
 ```bash
-# 激活环境（首次需要）
-"C:/Users/King/.workbuddy/binaries/python/envs/kb/Scripts/python.exe" -m pip install -r requirements.txt
+# 安装依赖（首次需要）
+python -m pip install -r requirements.txt
 
 # 启动
-"C:/Users/King/.workbuddy/binaries/python/envs/kb/Scripts/python.exe" app.py
+python app.py
 ```
 
 ## 项目结构
