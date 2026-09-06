@@ -3,6 +3,7 @@ data/
 backup/
 .workbuddy/
 项目目标.txt
+.kb_data_dir
 
 # ===== 安全设计文档（公开仓库不纳入）=====
 docs/
