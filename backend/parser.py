@@ -5,11 +5,22 @@ import re
 import html
 from html.parser import HTMLParser
 
+# 无文本可提取的媒体/压缩包扩展名：入库时不走文本解析，直接返回空文本
+# （视频 + 音频 + 压缩包）。这些二进制文件绝不能被当作文本读取。
+MEDIA_NO_TEXT_EXTS = {
+    # 视频
+    ".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm", ".m4v", ".3gp",
+    # 音频
+    ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".m4a", ".opus",
+    # 压缩包
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
+}
+
 SUPPORTED_EXTS = {
     ".pdf", ".docx", ".md", ".markdown", ".txt", ".html", ".htm",
     ".xlsx", ".xls", ".pptx",
     ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif", ".gif",
-}
+} | MEDIA_NO_TEXT_EXTS
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif", ".gif"}
 
 
@@ -195,6 +206,9 @@ def extract_text(path):
     """从文件提取纯文本，返回 (text, title)。"""
     ext = os.path.splitext(path)[1].lower()
     base = os.path.splitext(os.path.basename(path))[0]
+    # 无文本媒体（视频/音频/压缩包）：直接返回空文本，严禁把二进制当文本读
+    if ext in MEDIA_NO_TEXT_EXTS:
+        return "", base
     if ext == ".pdf":
         text = _parse_pdf(path)
     elif ext == ".docx":
