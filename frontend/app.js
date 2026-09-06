@@ -1,17 +1,15 @@
 /* ============ 个人知识管理工作台 · 前端逻辑 v2 ============ */
 "use strict";
 
-/* ---------- 分类颜色 ---------- */
+/* ---------- 分类颜色（文件类型） ---------- */
 const CAT_COLORS = {
-  "技术开发": "#0a84ff",
-  "人工智能": "#bf5af2",
-  "金融投资": "#ff9f0a",
-  "营销运营": "#ff375f",
-  "教育学习": "#30d158",
-  "健康养生": "#64d2ff",
-  "职场管理": "#ffd60a",
-  "生活随笔": "#ff9f0a",
-  "未分类": "#8e8e93",
+  "文档": "#0a84ff",
+  "图片": "#30d158",
+  "视频": "#ff375f",
+  "音频": "#ff9f0a",
+  "压缩包": "#ffd60a",
+  "代码": "#bf5af2",
+  "其他": "#8e8e93",
 };
 const EXT_META = {
   pdf: ["PDF", "#ff453a"], docx: ["DOCX", "#0a84ff"], md: ["MD", "#30d158"],
@@ -21,6 +19,18 @@ const EXT_META = {
   png: ["IMG", "#bf5af2"], jpg: ["IMG", "#bf5af2"], jpeg: ["IMG", "#bf5af2"],
   bmp: ["IMG", "#bf5af2"], webp: ["IMG", "#bf5af2"], tiff: ["IMG", "#bf5af2"],
   tif: ["IMG", "#bf5af2"], gif: ["IMG", "#bf5af2"],
+  // 视频
+  mp4: ["MP4", "#ff375f"], mkv: ["MKV", "#ff375f"], mov: ["MOV", "#ff375f"],
+  avi: ["AVI", "#ff375f"], webm: ["WEBM", "#ff375f"], m4v: ["M4V", "#ff375f"],
+  wmv: ["WMV", "#ff375f"], flv: ["FLV", "#ff375f"], "3gp": ["3GP", "#ff375f"],
+  // 音频
+  mp3: ["MP3", "#ff9f0a"], wav: ["WAV", "#ff9f0a"], flac: ["FLAC", "#ff9f0a"],
+  aac: ["AAC", "#ff9f0a"], m4a: ["M4A", "#ff9f0a"], ogg: ["OGG", "#ff9f0a"],
+  opus: ["OPUS", "#ff9f0a"], wma: ["WMA", "#ff9f0a"],
+  // 压缩包
+  zip: ["ZIP", "#ffd60a"], rar: ["RAR", "#ffd60a"], "7z": ["7Z", "#ffd60a"],
+  tar: ["TAR", "#ffd60a"], gz: ["GZ", "#ffd60a"], bz2: ["BZ2", "#ffd60a"],
+  xz: ["XZ", "#ffd60a"],
 };
 const DEFAULT_EXT = ["FILE", "#636366"];
 
@@ -176,7 +186,7 @@ async function loadDocuments() {
 function renderCatNav(total) {
   const nav = $("catNav");
   const counts = { "全部": total, ...state.categories };
-  const order = ["全部", "技术开发", "人工智能", "金融投资", "营销运营", "教育学习", "健康养生", "职场管理", "生活随笔", "未分类"];
+  const order = ["全部", "文档", "图片", "视频", "音频", "压缩包", "代码", "其他"];
   const cats = order.filter((c) => counts[c] !== undefined);
   nav.innerHTML = cats
     .map(
@@ -250,7 +260,7 @@ function renderDocuments() {
       $("emptySub").textContent = "试试文件名、文件夹路径或正文里的任意词";
     } else {
       $("emptyTitle").textContent = "还没有文档";
-      $("emptySub").textContent = "把收藏的报告、笔记拖进来，自动总结并分类";
+      $("emptySub").textContent = "拖入文档 / 图片 / 视频 / 音频 / 压缩包，自动归类并管理";
     }
     return;
   }
@@ -260,7 +270,7 @@ function renderDocuments() {
     .map((d, i) => {
       const ext = (d.ext || "").replace(".", "").toLowerCase();
       const [label, color] = EXT_META[ext] || DEFAULT_EXT;
-      const cat = d.category || "未分类";
+      const cat = d.category || "其他";
       const kw = (d.keywords || []).slice(0, 3);
       const title = hl(d.title || d.filename, state.q);
       // 命中来源徽标：文件名 / 路径 / 分类 / 标签 / 内容…
@@ -359,7 +369,7 @@ async function processOne(item) {
 
 async function uploadFiles(fileList) {
   const files = Array.from(fileList).filter(
-    (f) => /\.(pdf|docx|md|markdown|txt|html|htm|xlsx|xls|pptx|png|jpg|jpeg|bmp|webp|tiff|tif|gif)$/i.test(f.name)
+    (f) => /\.(pdf|docx|md|markdown|txt|html|htm|xlsx|xls|pptx|png|jpg|jpeg|bmp|webp|tiff|tif|gif|mp4|avi|mov|wmv|flv|mkv|webm|m4v|3gp|mp3|wav|aac|flac|ogg|wma|m4a|opus|zip|rar|7z|tar|gz|bz2|xz)$/i.test(f.name)
   );
   if (files.length !== fileList.length) toast("已忽略不支持的文件类型");
   if (files.length === 0) return;
@@ -386,7 +396,14 @@ async function uploadFiles(fileList) {
 
 /* ---------- 详情抽屉（焦点管理 + 键盘闭环） ---------- */
 const PREVIEW_IMAGE = new Set(["png", "jpg", "jpeg", "bmp", "webp", "tiff", "tif", "gif"]);
-const PREVIEW_NO = new Set(["xlsx", "xls", "pptx"]);
+const PREVIEW_NO = new Set([
+  // Office：下载查看
+  "xlsx", "xls", "pptx",
+  // 视频 / 音频 / 压缩包：无文本预览，统一提示下载
+  "mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp",
+  "mp3", "wav", "aac", "flac", "ogg", "wma", "m4a", "opus",
+  "zip", "rar", "7z", "tar", "gz", "bz2", "xz",
+]);
 
 /* 源文件预览：fetch 带鉴权头取 blob → objectURL（img/iframe 无法带自定义 header） */
 async function loadFileBlob(stored_name) {
@@ -417,7 +434,7 @@ async function openDrawer(id) {
 
 function renderDrawer(d) {
   const body = $("drawerBody");
-  const cat = d.category || "未分类";
+  const cat = d.category || "其他";
   const kw = d.keywords || [];
   const tags = d.tags || [];
   const ext = (d.ext || "").replace(".", "").toLowerCase();
