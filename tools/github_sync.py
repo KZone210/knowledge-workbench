@@ -40,7 +40,7 @@ EXCLUDE_DIR_NAMES = {
     ".idea", ".vscode", "venv", ".venv", "env", "node_modules",
 }
 EXCLUDE_FILE_PATTERNS = ("*.log", "*.pyc", "*.pyo", "*.swp", "*.lnk")
-EXCLUDE_FILE_NAMES = {"项目目标.txt"}
+EXCLUDE_FILE_NAMES = {"项目目标.txt", ".kb_data_dir"}
 
 
 def get_token():
