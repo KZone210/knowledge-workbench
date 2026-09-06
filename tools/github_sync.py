@@ -39,7 +39,7 @@ EXCLUDE_DIR_NAMES = {
     ".git", ".workbuddy", "data", "backup", "docs", "__pycache__",
     ".idea", ".vscode", "venv", ".venv", "env", "node_modules",
 }
-EXCLUDE_FILE_PATTERNS = ("*.log", "*.pyc", "*.pyo", "*.swp")
+EXCLUDE_FILE_PATTERNS = ("*.log", "*.pyc", "*.pyo", "*.swp", "*.lnk")
 EXCLUDE_FILE_NAMES = {"项目目标.txt"}
 
 
@@ -59,18 +59,23 @@ def get_token():
 
 
 def api_request(method, url, token, body=None, retries=3):
-    """带代理与重试的 GitHub API 请求，返回 (status, json_dict)。"""
+    """带代理与重试的 GitHub API 请求，返回 (status, json_dict)。
+
+    处理：301/302 重定向（跟随 Location，保持原 method/body）、403 限流、
+    409/422/503 可重试错误、网络层错误。
+    """
     proxy = urllib.request.ProxyHandler({"https": PROXY, "http": PROXY})
     opener = urllib.request.build_opener(proxy)
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("User-Agent", "knowledge-workbench-backup")
-    if body is not None:
-        req.add_header("Content-Type", "application/json")
     last_err = None
+    cur_url = url
     for i in range(retries):
+        req = urllib.request.Request(cur_url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("User-Agent", "knowledge-workbench-backup")
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
         try:
             with opener.open(req, timeout=60) as resp:
                 raw = resp.read()
@@ -81,12 +86,19 @@ def api_request(method, url, token, body=None, retries=3):
                 info = json.loads(raw)
             except Exception:
                 info = {"message": raw[:200].decode("utf-8", "replace")}
-            if e.code in (403, 404) and "sha" not in str(body):
-                # 409/422 类可重试；403 rate limit 判断
-                if "rate limit" in str(info).lower():
-                    time.sleep(5)
+            # 301/302：跟随 Location（仓库迁移/路径大小写），保持原 method/body
+            if e.code in (301, 302):
+                loc = e.headers.get("Location")
+                if loc:
+                    cur_url = loc
                     continue
                 return e.code, info
+            # 403 rate limit → 退避重试
+            if e.code == 403 and "rate limit" in str(info).lower():
+                time.sleep(5 * (i + 1))
+                last_err = info
+                continue
+            # 409/422/503 → 退避重试
             if e.code in (409, 422, 503):
                 time.sleep(2 * (i + 1))
                 last_err = info
@@ -162,11 +174,19 @@ def main():
         with open(full, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("ascii")
         url = API + "/" + urllib.parse.quote(rel)
-        st, info = api_request("PUT", url, token, {
+        # 云端已存在文件必须带 sha 才能更新：先 GET 取当前 sha（404 视为新建，不带 sha）
+        existing_sha = None
+        st_get, info_get = api_request("GET", url, token)
+        if st_get == 200 and isinstance(info_get, dict) and "sha" in info_get:
+            existing_sha = info_get["sha"]
+        put_body = {
             "message": f"backup {rel} [{date}]",
             "content": b64,
             "branch": BRANCH,
-        })
+        }
+        if existing_sha:
+            put_body["sha"] = existing_sha
+        st, info = api_request("PUT", url, token, put_body)
         if st in (200, 201):
             state[rel] = h
             uploaded.append(rel)
