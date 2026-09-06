@@ -8,7 +8,7 @@
 - 安全问题第二钥匙通道：answer_KEK 单独包裹 DEK
 - 注册 / 登录 / 登出 / 改密 / 安全问题找回 / 管理员重置密码
 - 登录与答题限流（连续失败锁定）
-- 系统初始化：默认管理员 King/King + system_vault + 老明文库迁移
+- 系统初始化：默认管理员账号（随机密码 + 强制改密）+ system_vault + 老明文库迁移
 
 安全约束:
 - DEK / KEK / master_key / 密码 / 安全答案 只在内存，绝不落盘、绝不进日志
@@ -41,6 +41,10 @@ LOCK_MINUTES = 15
 # 全局进程级 Master Key 缓存（首次管理员登录/创建时激活；注册与管理员重置依赖它）
 _master_key: bytes | None = None
 _master_lock = threading.Lock()
+
+# 首次初始化时随机生成的默认管理员密码（仅本进程内存，供老明文库迁移使用；
+# 进程重启后即失效，此时迁移自动跳过——与"已改密无法自动迁移"语义一致）
+_INITIAL_ADMIN_PASSWORD: str | None = None
 
 DB_PATH = get_db_path()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -220,8 +224,15 @@ def _get_admin():
 
 
 def _create_default_admin() -> None:
-    """首次启动创建默认管理员 King/King + system_vault（Master Key 即刻激活）。"""
-    username, password = "king", "king"
+    """首次启动创建默认管理员账号 + system_vault（Master Key 即刻激活）。
+
+    默认密码随机生成并打印到控制台（首次登录强制改密），
+    避免公开代码中出现固定默认凭据。
+    """
+    global _INITIAL_ADMIN_PASSWORD
+    username = "king"
+    password = secrets.token_urlsafe(12)
+    _INITIAL_ADMIN_PASSWORD = password
     salt_hash = base64.b64encode(secrets.token_bytes(16)).decode()
     salt_kek = base64.b64encode(secrets.token_bytes(16)).decode()
     pw_hash = hash_password(password)
@@ -254,7 +265,7 @@ def _create_default_admin() -> None:
     audit("system", "init_default_admin", username)
     # 管理员 DEK 入 key_wraps 版本历史
     _archive_wrap(admin_id, salt_kek, wrapped, retired=1)
-    print("\n  [初始化] 已创建默认管理员账号: king / king（首次登录请立即修改密码）\n")
+    print(f"\n  [初始化] 已创建默认管理员账号: {username} / {password}（首次登录请立即修改密码）\n")
 
 
 def _archive_wrap(user_id: int, salt_kek: str, wrapped_dek: str, retired: int = 0) -> None:
@@ -297,8 +308,9 @@ def _migrate_legacy_documents() -> None:
     if not admin:
         conn.close()
         return
-    # 解出管理员 DEK（默认密码 king；若已改密则无法自动迁移，跳过）
-    kek = _derive_kek("king", admin["salt_kek"]) if admin["username"] == "king" else None
+    # 解出管理员 DEK（仅首次初始化时的随机默认密码可自动迁移；已改密则跳过）
+    kek = _derive_kek(_INITIAL_ADMIN_PASSWORD, admin["salt_kek"]) \
+        if (_INITIAL_ADMIN_PASSWORD and admin["username"] == "king") else None
     if kek is None:
         conn.close()
         return
