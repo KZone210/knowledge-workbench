@@ -1,111 +1,107 @@
 # -*- coding: utf-8 -*-
-"""自动分类模块：预设类别关键词库 + 加权打分，输出类别与标签。"""
+"""自动分类模块：按文件扩展名归类为「文件类型」。
 
-# 类别关键词库：词 → 权重（出现 1 次以上的词权重更高）
-CATEGORIES = {
-    "技术开发": {
-        "python": 3, "代码": 3, "编程": 3, "开发": 2, "前端": 3, "后端": 3, "数据库": 2,
-        "接口": 2, "api": 3, "部署": 2, "软件": 2, "程序": 2, "框架": 2, "算法": 2,
-        "调试": 2, "bug": 3, "git": 3, "函数": 2, "变量": 2, "服务器": 2, "linux": 3,
-        "docker": 3, "js": 3, "html": 3, "css": 3, "javascript": 3, "react": 3,
-        "vue": 3, "架构": 2, "安全": 2, "漏洞": 2, "注入": 2, "测试": 2, "编译": 2,
+历史版本按内容主题（8 大类关键词加权打分）分类，已废弃；现改为扩展名归类。
+扩展名分组参考开源项目 BoddapuLokesh/Automatic-File-Organiser，类别名本地化为
+中文并按知识库场景增补（见 FILE_CATEGORIES）。
+
+对外接口（保持模块符号兼容）：
+- FILE_CATEGORIES      : 文件类型 → 扩展名集合（扩展名不含点、小写）
+- FILE_CATEGORY_ORDER  : 前端分类栏展示顺序
+- FILE_TYPE_NAMES      : 全部文件类型名（含“其他”）
+- DEFAULT_CATEGORY     : 未匹配扩展名时的兜底类别
+- classify_by_ext(ext) -> 文件类型类别名
+- build_tags(keywords, category) -> 标签列表
+"""
+
+from __future__ import annotations
+
+# 文件类型 → 扩展名（不含点、小写）。可按需增补。
+FILE_CATEGORIES: dict[str, set[str]] = {
+    "文档": {
+        "pdf", "doc", "docx", "txt", "xls", "xlsx", "ppt", "pptx",
+        "odt", "rtf", "csv", "md", "markdown",
     },
-    "人工智能": {
-        "人工智能": 3, "大模型": 3, "机器学习": 3, "深度学习": 3, "神经网络": 3,
-        "gpt": 3, "openai": 3, "模型": 2, "训练": 2, "推理": 2, "提示词": 3,
-        "prompt": 3, "agent": 3, "智能体": 3, "aigc": 3, "生成": 2, "扩散模型": 3,
-        "llm": 3, "transformer": 3, "多模态": 3, "语义": 2, "embedding": 3,
-        "chatgpt": 3, "ai": 3, "数字人": 2, "语音识别": 3, "图像识别": 3, "nlp": 3,
+    "图片": {
+        "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "svg", "webp", "ico",
     },
-    "金融投资": {
-        "投资": 3, "股票": 3, "基金": 3, "市场": 2, "财报": 3, "估值": 3, "收益率": 3,
-        "资产": 2, "债券": 3, "行情": 2, "a股": 3, "美股": 3, "港股": 3, "仓位": 3,
-        "风险": 2, "涨": 2, "跌": 2, "板块": 2, "指数": 2, "量化": 3, "回测": 3,
-        "因子": 3, "交易": 2, "市值": 2, "市盈率": 3, "净利润": 3, "营收": 3,
-        "现金流": 3, "货币": 2, "利率": 2, "通胀": 3, "宏观经济": 3, "gdp": 3,
-        "银行": 2, "信贷": 3, "理财": 3, "保险": 2, "证券": 2, "期货": 3, "期权": 3,
-        "分红": 2, "认购": 2, "IPO": 3, "定投": 3, "比特币": 3, "区块链": 3,
+    "视频": {
+        "mp4", "avi", "mov", "wmv", "flv", "mkv", "webm", "m4v", "3gp",
     },
-    "营销运营": {
-        "运营": 3, "营销": 3, "用户": 2, "流量": 3, "转化": 3, "品牌": 2, "内容": 2,
-        "投放": 3, "增长": 2, "涨粉": 3, "粉丝": 2, "直播间": 3, "短视频": 3,
-        "抖音": 3, "小红书": 3, "公众号": 3, "爆款": 3, "选题": 3, "矩阵": 3,
-        "变现": 3, "电商": 3, "销售": 2, "成交": 3, "数据": 2, "复盘": 3, "私域": 3,
-        "社群": 3, "广告": 2, "点击率": 3, "曝光": 3, "留存": 3, "拉新": 3,
+    "音频": {
+        "mp3", "wav", "aac", "flac", "ogg", "wma", "m4a", "opus",
     },
-    "教育学习": {
-        "学习": 3, "教程": 3, "课程": 3, "知识": 2, "培训": 3, "笔记": 2, "方法": 2,
-        "读书": 3, "阅读": 3, "写作": 3, "考试": 3, "复习": 3, "知识点": 3,
-        "技能": 2, "练习": 2, "教学": 3, "老师": 2, "学生": 2, "教材": 3, "背诵": 3,
-        "思维导图": 3, "理解": 2, "归纳": 2, "总结": 2, "效率": 2, "番茄": 3,
+    "压缩包": {
+        "zip", "rar", "7z", "tar", "gz", "bz2", "xz",
     },
-    "健康养生": {
-        "健康": 3, "养生": 3, "饮食": 3, "运动": 3, "睡眠": 3, "医疗": 3, "身体": 2,
-        "营养": 3, "锻炼": 3, "跑步": 3, "瑜伽": 3, "健身": 3, "疾病": 3, "医生": 2,
-        "症状": 3, "治疗": 3, "药物": 3, "体检": 3, "心理": 2, "情绪": 2, "压力": 2,
-        "焦虑": 3, "免疫力": 3, "维生素": 3, "体重": 3, "血糖": 3, "血压": 3,
-    },
-    "职场管理": {
-        "管理": 3, "团队": 3, "职场": 3, "领导力": 3, "效率": 2, "项目": 2, "组织": 2,
-        "沟通": 2, "汇报": 3, "目标": 2, "执行": 2, "复盘": 3, "激励": 3, "招聘": 3,
-        "面试": 3, "简历": 3, "晋升": 3, "绩效": 3, "kpi": 3, "okr": 3, "会议": 2,
-        "协作": 2, "流程": 2, "制度": 2, "员工": 2, "老板": 2, "同事": 2, "裁员": 3,
-    },
-    "生活随笔": {
-        "生活": 3, "随笔": 3, "日记": 3, "心情": 3, "旅行": 3, "美食": 3, "周末": 2,
-        "朋友": 2, "家庭": 2, "孩子": 2, "父母": 2, "记录": 2, "感悟": 3, "回忆": 3,
-        "日常": 3, "探店": 3, "风景": 2, "电影": 2, "音乐": 2, "读书会": 3,
+    "代码": {
+        "py", "js", "html", "htm", "css", "java", "c", "cpp", "h", "php",
+        "rb", "go", "rs", "json", "xml", "yaml", "sql", "sh",
     },
 }
 
-DEFAULT_CATEGORY = "未分类"
+# 反查表：扩展名(小写) → 文件类型
+_EXT_TO_CATEGORY: dict[str, str] = {}
+for _cat, _exts in FILE_CATEGORIES.items():
+    for _ext in _exts:
+        _EXT_TO_CATEGORY[_ext] = _cat
+
+# 分类栏展示顺序
+FILE_CATEGORY_ORDER: list[str] = ["文档", "图片", "视频", "音频", "压缩包", "代码", "其他"]
+
+# 全部文件类型名（含兜底“其他”）
+FILE_TYPE_NAMES: list[str] = list(FILE_CATEGORY_ORDER)
+
+# 未匹配扩展名/无扩展名 → 其他
+DEFAULT_CATEGORY: str = "其他"
 
 
-def classify(text, keywords=None):
+def _normalize(ext: str) -> str:
+    """把各种形式的扩展名规整为“不含点、小写、仅最后一段”。
+
+    兼容 '.pdf' / 'PDF' / 'archive.tar.gz' / 'dir/file.JPG' 等输入。
     """
-    基于关键词加权打分分类。
-    返回 (category, score, matched_words)。
+    if not ext:
+        return ""
+    s = str(ext).strip().lower().replace("\\", "/")
+    s = s.rsplit("/", 1)[-1]
+    if "." in s:
+        s = s.rsplit(".", 1)[-1]
+    return s
+
+
+def classify_by_ext(ext: str) -> str:
+    """按文件扩展名归类为文件类型。
+
+    Args:
+        ext: 扩展名或文件名，如 '.pdf'、'pdf'、'报告.PDF'、'a.tar.gz'。
+
+    Returns:
+        文件类型中文名；无法识别/无扩展名时返回 DEFAULT_CATEGORY（其他）。
     """
-    if not text:
-        return DEFAULT_CATEGORY, 0.0, []
-    low_text = text.lower()
-    scores = {}
-    matched = {}
-    for cat, words in CATEGORIES.items():
-        score = 0.0
-        hits = []
-        for word, weight in words.items():
-            w = word.lower()
-            cnt = low_text.count(w)
-            if cnt > 0:
-                s = weight * (1.0 + 0.5 * min(cnt, 4))
-                score += s
-                hits.append(word)
-        if score > 0:
-            scores[cat] = score
-            matched[cat] = hits
-
-    if not scores:
-        return DEFAULT_CATEGORY, 0.0, []
-
-    best = max(scores, key=scores.get)
-    best_score = scores[best]
-    second_score = sorted(scores.values(), reverse=True)[1] if len(scores) > 1 else 0
-
-    # 阈值：至少 2 个命中词且总分 >= 5
-    if len(matched[best]) < 2 or best_score < 5:
-        return DEFAULT_CATEGORY, best_score, matched[best]
-
-    # 平局：与第二名差距 < 15% 且绝对差距 < 3（避免多主题文档误伤）
-    tie = second_score > 0 and (best_score - second_score) < max(1.0, best_score * 0.15)
-    if tie:
-        return DEFAULT_CATEGORY, best_score, matched[best]
-    return best, best_score, matched[best]
+    key = _normalize(ext)
+    if not key:
+        return DEFAULT_CATEGORY
+    return _EXT_TO_CATEGORY.get(key, DEFAULT_CATEGORY)
 
 
-def build_tags(keywords, category):
-    """标签 = 关键词 + 类别。"""
-    tags = list(keywords)
-    if category != DEFAULT_CATEGORY:
-        tags.append(category)
+def build_tags(keywords: list[str] | None, category: str | None = None) -> list[str]:
+    """生成文档标签列表。
+
+    新版 category 语义为「文件类型」（文档/图片/...），是文件固有属性而非常规
+    内容标签，因此不再把 category 追加进 tags，避免文件类型标签淹没关键词云。
+    仅返回去重后的内容关键词。
+
+    Args:
+        keywords: 内容关键词（可空）。
+        category: 保留兼容参数（新逻辑不再使用）。
+
+    Returns:
+        去重后的标签列表。
+    """
+    tags: list[str] = []
+    for kw in (keywords or []):
+        t = str(kw).strip()
+        if t and t not in tags:
+            tags.append(t)
     return tags
