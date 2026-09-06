@@ -37,6 +37,53 @@ try:
 except Exception:
     HAS_WEBVIEW = False
 
+
+def _apply_webview_patches():
+    """运行时给 pywebview 打补丁（不依赖修改 venv 里的第三方库文件），
+    让下载者在干净环境也能避免 WebView2 黑屏/白屏。
+
+    补丁 1（黑屏根因修复）：WebView2 的后台网络活动（Safe Browsing / 组件更新 / 同步 /
+        OptimizationGuide 模型下载）在本机代理环境下会卡住、阻塞所有导航。
+        禁用它即可让 localhost 页面正常加载。
+    补丁 2（STA 线程修复）：pythonnet 3.x 首次在本线程使用 .NET 时默认 CoInitialize(MTA)，
+        导致 WebView2 初始化报 RPC_E_CHANGED_MODE、窗口黑屏。提前显式 CoInitialize(STA)。
+    """
+    try:
+        import ctypes
+        from webview.platforms import edgechromium as _ec
+
+        # 补丁 1：黑屏修复 —— EdgeChrome 初始化完成后追加浏览器启动参数
+        _orig_ec_init = _ec.EdgeChrome.__init__
+
+        def _patched_ec_init(self, *args, **kwargs):
+            _orig_ec_init(self, *args, **kwargs)
+            try:
+                self.webview.CreationProperties.AdditionalBrowserArguments = (
+                    "--disable-features=ElasticOverscroll,OptimizationGuideModelDownloading,MediaRouter "
+                    "--disable-background-networking --disable-component-update --disable-sync "
+                    "--disable-default-apps --no-first-run"
+                )
+            except Exception:
+                pass
+
+        _ec.EdgeChrome.__init__ = _patched_ec_init
+
+        # 补丁 2：STA 修复 —— BrowserForm 构造前把线程初始化为 STA
+        from webview.platforms import winforms as _wf
+
+        _orig_bform_init = _wf.BrowserView.BrowserForm.__init__
+
+        def _patched_bform_init(self, *args, **kwargs):
+            try:
+                ctypes.windll.ole32.CoInitializeEx(None, 0x2)  # 0x2 = COINIT_APARTMENTTHREADED
+            except Exception:
+                pass
+            return _orig_bform_init(self, *args, **kwargs)
+
+        _wf.BrowserView.BrowserForm.__init__ = _patched_bform_init
+    except Exception as e:
+        log(f"webview 补丁注入失败（回退默认行为）: {e}")
+
 # 关键修复：清除沙箱/系统注入的代理环境变量。
 # 否则 WebView2 会把 http://127.0.0.1:8787 也走代理（如 127.0.0.1:58464），
 # 导致 localhost 请求被代理拦截 → 页面导航失败 → 应用窗口黑屏。
@@ -60,7 +107,28 @@ if not os.path.exists(PYTHONW):
 
 PORT = int(os.environ.get("PORT", "8787"))
 URL = f"http://127.0.0.1:{PORT}/"
-KB_DATA_DIR = os.environ.get("KB_DATA_DIR", r"D:\agent\知识工作台_数据")
+def _resolve_data_dir():
+    """数据目录优先级：环境变量 KB_DATA_DIR > 项目根 .kb_data_dir 配置文件 > 项目内 data/。
+
+    - 本机：用 `.kb_data_dir`（不入库）指向外置目录，实现程序/数据隔离
+    - 下载者：无配置文件，默认项目内 data/，零配置即用
+    """
+    env_dir = os.environ.get("KB_DATA_DIR")
+    if env_dir:
+        return env_dir
+    cfg = os.path.join(BASE, ".kb_data_dir")
+    if os.path.exists(cfg):
+        try:
+            with open(cfg, encoding="utf-8") as f:
+                v = f.read().strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    return os.path.join(BASE, "data")
+
+
+KB_DATA_DIR = _resolve_data_dir()
 ICON_PNG = os.path.join(BASE, "kb_icon.png")
 ICON_ICO = os.path.join(BASE, "kb_icon.ico")
 
@@ -418,6 +486,9 @@ def run_gui():
         log(f"注册关闭事件失败: {e}")
 
     log("应用窗口已启动")
+    # 关键：在 webview.start() 前注入补丁（黑屏修复 + STA 线程修复），
+    # 否则干净环境下 WebView2 会黑屏/白屏。补丁幂等，可重复调用。
+    _apply_webview_patches()
     try:
         webview.start(
             private_mode=False,
