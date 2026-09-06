@@ -331,7 +331,7 @@ def _migrate_legacy_documents() -> None:
                 (
                     crypto.enc_field(dek, r["filename"] or ""),
                     crypto.enc_field(dek, r["title"] or ""),
-                    crypto.enc_field(dek, r["category"] or "未分类"),
+                    crypto.enc_field(dek, r["category"] or "其他"),
                     crypto.enc_field(dek, r["tags"] or "[]"),
                     crypto.enc_field(dek, r["keywords"] or "[]"),
                     crypto.enc_field(dek, r["summary"] or ""),
