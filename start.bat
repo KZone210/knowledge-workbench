@@ -3,11 +3,20 @@ chcp 65001 >nul
 title 个人知识管理工作台
 cd /d "%~dp0"
 
-set PY=C:\Users\King\.workbuddy\binaries\python\envs\kb\Scripts\python.exe
-if not exist "%PY%" set PY=python
+rem ===== 检测 Python（需已安装并加入 PATH）=====
+set PY=python
+where python >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo  [错误] 未检测到 Python，请先安装 Python 3.10+ 并勾选 "Add to PATH"
+    echo.
+    pause
+    exit /b 1
+)
 
-rem ===== 数据目录外置：程序与用户数据隔离（更新程序不影响数据）=====
-set KB_DATA_DIR=D:\agent\知识工作台_数据
+rem ===== 数据目录：优先 .kb_data_dir 配置，否则项目内 data/ =====
+set KB_DATA_DIR=%~dp0data
+if exist "%~dp0.kb_data_dir" set /p KB_DATA_DIR=<"%~dp0.kb_data_dir"
 if not exist "%KB_DATA_DIR%" mkdir "%KB_DATA_DIR%"
 
 rem ===== 检测服务是否已在运行（端口 8787 被占用 = 已在运行）=====
