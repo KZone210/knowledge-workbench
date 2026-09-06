@@ -20,7 +20,18 @@
 
 ### Windows（双击即可）
 
-双击 `start.bat`，浏览器自动访问 `http://127.0.0.1:8787`
+双击项目目录下的 **「知识工作台」** 快捷方式（已生成，自定义图标）。
+
+- 首次启动：服务后台拉起 → 弹出独立应用窗口（原生窗口，非浏览器）→ 系统托盘常驻
+- 再次点击：若服务在跑则直接弹出应用窗口；无需重启
+- 关闭窗口（点 X）：缩到托盘，服务继续后台运行；托盘右键 → **打开窗口** 重新弹出
+- 彻底退出：托盘图标右键 → **退出知识工作台**（或 `python tools/kb_launcher.py --stop`）
+- 开机自启：托盘菜单 → 「开机自启」开关
+- 快捷方式损坏/想重建：`python tools/make_shortcut.py`
+
+### 兜底启动（排障 / 控制台模式）
+
+双击 `start.bat`：保留黑窗口 + 控制台日志，便于调试；关闭黑窗口即停服务。
 
 ### 命令行
 
@@ -40,14 +51,21 @@
 ├── backend/
 │   ├── parser.py       PDF/Word/MD/TXT/HTML 文本提取
 │   ├── nlp.py          jieba 分词 + TF-IDF + TextRank 摘要
-│   ├── classify.py     关键词加权分类（8 个预设类别）
+│   ├── classify.py     按文件扩展名分类（文档/图片/视频/音频/压缩包/代码/其他）
 │   └── store.py        元数据 + 全文 SQLite
 ├── frontend/            # iOS 风格单页前端（原生 HTML/CSS/JS，零依赖）
-├── data/               # 数据目录（启动时自动创建）
-│   ├── documents/      入库文件副本（按时间戳命名）
-│   └── knowledge.db    SQLite 数据库
-├── start.bat           Windows 一键启动
-├── start.sh            Git Bash 启动
+├── data/               # 数据目录（已外置为 KB_DATA_DIR，启动时由 env 指定；仓库中为空）
+│   ├── documents/      入库文件副本（按时间戳命名，加密存储）
+│   └── knowledge.db    SQLite 数据库（加密列）
+├── tools/              # 工具脚本
+│   ├── kb_launcher.py     应用化守护启动器（托盘/开机自启/退出，被桌面快捷方式调用）
+│   ├── make_icon.py       生成桌面图标 kb_icon.ico / kb_icon.png
+│   ├── backup.py          本地内容寻址快照备份（替代 Git 备份）
+│   ├── github_sync.py     GitHub Contents API 增量同步（手动触发："上传代码库"）
+│   ├── reclassify_ext.py  存量文档按扩展名重分类（一次性工具）
+│   └── changelog.py       升级记录归档（5 条滚动窗口）
+├── start.bat           # Windows 控制台启动（兜底/排障用；日常双击桌面「知识工作台」图标）
+├── start.sh            # Git Bash 启动
 └── requirements.txt
 ```
 
